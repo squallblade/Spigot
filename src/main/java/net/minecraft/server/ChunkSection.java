@@ -1,0 +1,277 @@
+package net.minecraft.server;
+
+public class ChunkSection {
+
+    private int yPos;
+    private int nonEmptyBlockCount;
+    private int tickingBlockCount;
+    private byte[] blockIds;
+    private NibbleArray extBlockIds;
+    private NibbleArray blockData;
+    private NibbleArray blockLight;
+    private NibbleArray skyLight;
+
+    public ChunkSection(int i, boolean flag) {
+        this.yPos = i;
+        this.blockIds = new byte[4096];
+        this.blockData = new NibbleArray(this.blockIds.length, 4);
+        this.blockLight = new NibbleArray(this.blockIds.length, 4);
+        if (flag) {
+            this.skyLight = new NibbleArray(this.blockIds.length, 4);
+        }
+    }
+
+    // CraftBukkit start
+    public ChunkSection(int y, boolean flag, byte[] blkIds, byte[] extBlkIds) {
+        this.yPos = y;
+        this.blockIds = blkIds;
+        if (extBlkIds != null) {
+            this.extBlockIds = new NibbleArray(extBlkIds, 4);
+        }
+        this.blockData = new NibbleArray(this.blockIds.length, 4);
+        this.blockLight = new NibbleArray(this.blockIds.length, 4);
+        if (flag) {
+            this.skyLight = new NibbleArray(this.blockIds.length, 4);
+        }
+        this.recalcBlockCounts();
+    }
+    // CraftBukkit end
+
+    public int a(int i, int j, int k) {
+        int l = this.blockIds[j << 8 | k << 4 | i] & 255;
+
+        return this.extBlockIds != null ? this.extBlockIds.a(i, j, k) << 8 | l : l;
+    }
+
+    public void a(int i, int j, int k, int l) {
+        int i1 = this.blockIds[j << 8 | k << 4 | i] & 255;
+
+        if (this.extBlockIds != null) {
+            i1 |= this.extBlockIds.a(i, j, k) << 8;
+        }
+
+        if (i1 == 0 && l != 0) {
+            ++this.nonEmptyBlockCount;
+            if (Block.byId[l] != null && Block.byId[l].isTicking()) {
+                ++this.tickingBlockCount;
+            }
+        } else if (i1 != 0 && l == 0) {
+            --this.nonEmptyBlockCount;
+            if (Block.byId[i1] != null && Block.byId[i1].isTicking()) {
+                --this.tickingBlockCount;
+            }
+        } else if (Block.byId[i1] != null && Block.byId[i1].isTicking() && (Block.byId[l] == null || !Block.byId[l].isTicking())) {
+            --this.tickingBlockCount;
+        } else if ((Block.byId[i1] == null || !Block.byId[i1].isTicking()) && Block.byId[l] != null && Block.byId[l].isTicking()) {
+            ++this.tickingBlockCount;
+        }
+
+        this.blockIds[j << 8 | k << 4 | i] = (byte) (l & 255);
+        if (l > 255) {
+            if (this.extBlockIds == null) {
+                this.extBlockIds = new NibbleArray(this.blockIds.length, 4);
+            }
+
+            this.extBlockIds.a(i, j, k, (l & 3840) >> 8);
+        } else if (this.extBlockIds != null) {
+            this.extBlockIds.a(i, j, k, 0);
+        }
+    }
+
+    public int b(int i, int j, int k) {
+        return this.blockData.a(i, j, k);
+    }
+
+    public void b(int i, int j, int k, int l) {
+        this.blockData.a(i, j, k, l);
+    }
+
+    public boolean a() {
+        return this.nonEmptyBlockCount == 0;
+    }
+
+    public boolean b() {
+        return this.tickingBlockCount > 0;
+    }
+
+    public int d() {
+        return this.yPos;
+    }
+
+    public void c(int i, int j, int k, int l) {
+        this.skyLight.a(i, j, k, l);
+    }
+
+    public int c(int i, int j, int k) {
+        return this.skyLight.a(i, j, k);
+    }
+
+    public void d(int i, int j, int k, int l) {
+        this.blockLight.a(i, j, k, l);
+    }
+
+    public int d(int i, int j, int k) {
+        return this.blockLight.a(i, j, k);
+    }
+
+    public void recalcBlockCounts() {
+        // CraftBukkit start - optimize for speed
+        byte[] blkIds = this.blockIds;
+        int cntNonEmpty = 0;
+        int cntTicking = 0;
+        if (this.extBlockIds == null) { // No extended block IDs?  Don't waste time messing with them
+            for (int off = 0; off < blkIds.length; off++) {
+                int l = blkIds[off] & 0xFF;
+                if (l > 0) {
+                    if (Block.byId[l] == null) {
+                        blkIds[off] = 0;
+                    } else {
+                        ++cntNonEmpty;
+                        if (Block.byId[l].isTicking()) {
+                            ++cntTicking;
+                        }
+                    }
+                }
+            }
+        } else {
+            this.extBlockIds.forceToNonTrivialArray(); // Spigot
+            byte[] ext = this.extBlockIds.getValueArray();
+            for (int off = 0, off2 = 0; off < blkIds.length;) {
+                byte extid = ext[off2];
+                int l = (blkIds[off] & 0xFF) | ((extid & 0xF) << 8); // Even data
+                if (l > 0) {
+                    if (Block.byId[l] == null) {
+                        blkIds[off] = 0;
+                        ext[off2] &= 0xF0;
+                    } else {
+                        ++cntNonEmpty;
+                        if (Block.byId[l].isTicking()) {
+                            ++cntTicking;
+                        }
+                    }
+                }
+                off++;
+                l = (blkIds[off] & 0xFF) | ((extid & 0xF0) << 4); // Odd data
+                if (l > 0) {
+                    if (Block.byId[l] == null) {
+                        blkIds[off] = 0;
+                        ext[off2] &= 0x0F;
+                    } else {
+                        ++cntNonEmpty;
+                        if (Block.byId[l].isTicking()) {
+                            ++cntTicking;
+                        }
+                    }
+                }
+                off++;
+                off2++;
+            }
+            // Spigot start
+            this.extBlockIds.detectAndProcessTrivialArray();
+            if (this.extBlockIds.isTrivialArray() && (this.extBlockIds.getTrivialArrayValue() == 0)) {
+                this.extBlockIds = null;
+            }
+            // Spigot end
+        }
+        this.nonEmptyBlockCount = cntNonEmpty;
+        this.tickingBlockCount = cntTicking;
+    }
+
+    public void old_recalcBlockCounts() {
+        // CraftBukkit end
+        this.nonEmptyBlockCount = 0;
+        this.tickingBlockCount = 0;
+
+        for (int i = 0; i < 16; ++i) {
+            for (int j = 0; j < 16; ++j) {
+                for (int k = 0; k < 16; ++k) {
+                    int l = this.a(i, j, k);
+
+                    if (l > 0) {
+                        if (Block.byId[l] == null) {
+                            this.blockIds[j << 8 | k << 4 | i] = 0;
+                            if (this.extBlockIds != null) {
+                                this.extBlockIds.a(i, j, k, 0);
+                            }
+                        } else {
+                            ++this.nonEmptyBlockCount;
+                            if (Block.byId[l].isTicking()) {
+                                ++this.tickingBlockCount;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    public byte[] g() {
+        return this.blockIds;
+    }
+
+    public NibbleArray i() {
+        return this.extBlockIds;
+    }
+
+    public NibbleArray j() {
+        return this.blockData;
+    }
+
+    public NibbleArray k() {
+        return this.blockLight;
+    }
+
+    public NibbleArray l() {
+        return this.skyLight;
+    }
+
+    public void a(byte[] abyte) {
+        this.blockIds = validateByteArray(abyte); // Spigot - validate
+    }
+
+    public void a(NibbleArray nibblearray) {
+        // CraftBukkit start - don't hang on to an empty nibble array
+        boolean empty = true;
+        // Spigot start
+        if ((!nibblearray.isTrivialArray()) || (nibblearray.getTrivialArrayValue() != 0)) {
+            empty = false;
+        }
+        // Spigot end
+
+        if (empty) {
+            return;
+        }
+        // CraftBukkit end
+        this.extBlockIds = validateNibbleArray(nibblearray); // Spigot - validate
+    }
+
+    public void b(NibbleArray nibblearray) {
+        this.blockData = validateNibbleArray(nibblearray); // Spigot - validate
+    }
+
+    public void c(NibbleArray nibblearray) {
+        this.blockLight = validateNibbleArray(nibblearray); // Spigot - validate
+    }
+
+    public void d(NibbleArray nibblearray) {
+        this.skyLight = validateNibbleArray(nibblearray); // Spigot - validate
+    }
+    
+    // Spigot start - validate/correct nibble array
+    private static final NibbleArray validateNibbleArray(NibbleArray na) {
+        if ((na != null) && (na.getByteLength() < 2048)) {
+            na.resizeArray(2048);
+        }
+        return na;
+    }
+    // Validate/correct byte array
+    private static final byte[] validateByteArray(byte[] ba) {
+        if ((ba != null) && (ba.length < 4096)) {
+            byte[] newba = new byte[4096];
+            System.arraycopy(ba,  0,  newba,  0,  ba.length);
+            ba = newba;
+        }
+        return ba;
+    }
+    // Spigot end
+}
